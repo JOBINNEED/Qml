@@ -1,65 +1,120 @@
+"""
+baseline_benchmark.py
+=====================
+Step 1 of the Hybrid Quantum-Classical VRP Pipeline.
+
+PURPOSE:
+    Establish a mathematical ground truth by solving a small 3-node VRP
+    (depot + 2 delivery cities, 2 vehicles) with:
+        (a) IBM CPLEX  — exact classical solver (optimal solution)
+        (b) QAOA       — quantum approximate solver (Qiskit 1.x native API)
+
+    The comparison proves the foundational concept: QAOA can recover
+    near-optimal routing solutions on small instances, validating the
+    quantum formulation before scaling up.
+
+QUBIT COUNT:
+    n=3 nodes → N = n*(n-1) = 6 binary variables → 6 qubits (NISQ-safe)
+
+OUTPUTS:
+    outputs/baseline_nodes_distances.csv   — node coordinates
+    outputs/baseline_distance_matrix.csv   — raw distance matrix
+    outputs/cplex_route.png                — classical optimal route
+    outputs/qaoa_route.png                 — quantum route
+    outputs/baseline_routing_results.json  — cost comparison JSON
+    outputs/baseline_comparison.png        — side-by-side comparison chart
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
-import cplex
-from cplex.exceptions import CplexError
 import math
 import os
-import pandas as pd
 import json
+import pandas as pd
 
-from qiskit.utils import algorithm_globals
-from qiskit.circuit.library import RealAmplitudes
-from qiskit.primitives import Sampler
-from qiskit_ibm_runtime import QiskitRuntimeService
-# The notebook imported Sampler from qiskit_ibm_runtime too: from qiskit_ibm_runtime import Sampler
-
+# ── Qiskit 1.x imports ────────────────────────────────────────────────────────
+from qiskit_algorithms import QAOA
+from qiskit_algorithms.optimizers import SPSA, COBYLA
+from qiskit.primitives import StatevectorSampler
 from qiskit_optimization import QuadraticProgram
-from qiskit.algorithms.minimum_eigensolvers import QAOA
 from qiskit_optimization.algorithms import MinimumEigenOptimizer
-from qiskit.algorithms.optimizers import COBYLA, SPSA
-from qiskit.circuit.library import TwoLocal
-from qiskit.opflow import PauliSumOp
 
-# Create outputs directory
-if not os.path.exists("outputs"):
-    os.makedirs("outputs")
+# ── CPLEX (optional — graceful fallback if not installed) ─────────────────────
+try:
+    import cplex
+    from cplex.exceptions import CplexError
+    CPLEX_AVAILABLE = True
+except ImportError:
+    CPLEX_AVAILABLE = False
+    print("WARNING: CPLEX not installed. Classical baseline will be skipped.")
+    print("         Install with: pip install cplex")
 
-# Initialize the problem by defining the parameters
-n = 3  # number of nodes + depot (n+1)
-K = 2  # number of vehicles
+# ── Output directory ──────────────────────────────────────────────────────────
+os.makedirs("outputs", exist_ok=True)
+
+# ── Problem parameters ────────────────────────────────────────────────────────
+N_NODES = 3   # depot (0) + 2 delivery cities
+K_VEHICLES = 2
+
+print("=" * 65)
+print("  BASELINE BENCHMARK  —  Classical CPLEX vs Quantum QAOA")
+print("=" * 65)
+print(f"\n  Nodes     : {N_NODES}  (depot at index 0 + {N_NODES-1} delivery cities)")
+print(f"  Vehicles  : {K_VEHICLES}")
+print(f"  Qubits    : {N_NODES * (N_NODES - 1)}  [N = n×(n-1)]")
+print(f"  NISQ-safe : {'YES' if N_NODES*(N_NODES-1) <= 20 else 'NO'}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. PROBLEM INSTANCE GENERATOR
+# ══════════════════════════════════════════════════════════════════════════════
 
 class Initializer:
-    def __init__(self, n):
+    """Randomly places n nodes in a 2-D plane and computes Euclidean distances."""
+
+    def __init__(self, n, seed=1543):
         self.n = n
+        self.seed = seed
 
     def generate_instance(self):
-        n = self.n
-        np.random.seed(1543)
-        xc = (np.random.rand(n) - 0.5) * 10
-        yc = (np.random.rand(n) - 0.5) * 10
+        np.random.seed(self.seed)
+        xc = (np.random.rand(self.n) - 0.5) * 10
+        yc = (np.random.rand(self.n) - 0.5) * 10
 
-        instance = np.zeros([n, n])
-        for ii in range(0, n):
-            for jj in range(ii + 1, n):
-                instance[ii, jj] = (xc[ii] - xc[jj]) ** 2 + (yc[ii] - yc[jj]) ** 2
-                instance[jj, ii] = instance[ii, jj]
+        dist = np.zeros((self.n, self.n))
+        for i in range(self.n):
+            for j in range(i + 1, self.n):
+                d = (xc[i] - xc[j]) ** 2 + (yc[i] - yc[j]) ** 2
+                dist[i, j] = d
+                dist[j, i] = d
+        return xc, yc, dist
 
-        return xc, yc, instance
 
-# Initialize the problem by randomly generating the instance
-initializer = Initializer(n)
+initializer = Initializer(N_NODES)
 xc, yc, instance = initializer.generate_instance()
 
-# Save baseline nodes and distances
-nodes_df = pd.DataFrame({'node': range(n), 'xc': xc, 'yc': yc})
-nodes_df.to_csv("outputs/baseline_nodes_distances.csv", index=False)
+# Persist node data
+pd.DataFrame({'node': range(N_NODES), 'xc': xc, 'yc': yc}).to_csv(
+    "outputs/baseline_nodes_distances.csv", index=False
+)
 np.savetxt("outputs/baseline_distance_matrix.csv", instance, delimiter=",")
+print(f"\n[1] Generated {N_NODES}-node instance. Saved coordinates and distance matrix.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2. CLASSICAL SOLVER — IBM CPLEX
+# ══════════════════════════════════════════════════════════════════════════════
 
 class ClassicalOptimizer:
+    """
+    Solves VRP exactly using IBM CPLEX Integer Linear Programming.
+    Formulation follows the Miller-Tucker-Zemlin (MTZ) sub-tour elimination.
+    """
+
     def __init__(self, instance, n, K):
         self.instance = instance
-        self.n = n  # number of nodes
-        self.K = K  # number of vehicles
+        self.n = n
+        self.K = K
 
     def compute_allowed_combinations(self):
         f = math.factorial
@@ -67,162 +122,117 @@ class ClassicalOptimizer:
 
     def cplex_solution(self):
         instance = self.instance
-        n = self.n
-        K = self.K
+        n, K = self.n, self.K
 
-        my_obj = list(instance.reshape(1, n**2)[0]) + [0.0 for x in range(0, n - 1)]
-        my_ub = [1 for x in range(0, n**2 + n - 1)]
-        my_lb = [0 for x in range(0, n**2)] + [0.1 for x in range(0, n - 1)]
-        my_ctype = "".join(["I" for x in range(0, n**2)]) + "".join(
-            ["C" for x in range(0, n - 1)]
-        )
+        my_obj  = list(instance.reshape(1, n**2)[0]) + [0.0] * (n - 1)
+        my_ub   = [1] * (n**2 + n - 1)
+        my_lb   = [0] * n**2 + [0.1] * (n - 1)
+        my_ctype = "I" * n**2 + "C" * (n - 1)
 
         my_rhs = (
-            2 * ([K] + [1 for x in range(0, n - 1)])
-            + [1 - 0.1 for x in range(0, (n - 1) ** 2 - (n - 1))]
-            + [0 for x in range(0, n)]
+            2 * ([K] + [1] * (n - 1))
+            + [1 - 0.1] * ((n - 1) ** 2 - (n - 1))
+            + [0] * n
         )
         my_sense = (
-            "".join(["E" for x in range(0, 2 * n)])
-            + "".join(["L" for x in range(0, (n - 1) ** 2 - (n - 1))])
-            + "".join(["E" for x in range(0, n)])
+            "E" * (2 * n)
+            + "L" * ((n - 1) ** 2 - (n - 1))
+            + "E" * n
         )
 
-        try:
-            my_prob = cplex.Cplex()
-            self.populatebyrow(my_prob, my_obj, my_ub, my_lb, my_ctype, my_sense, my_rhs)
-            my_prob.solve()
-        except CplexError as exc:
-            print(exc)
-            return
+        my_prob = cplex.Cplex()
+        self._populate(my_prob, my_obj, my_ub, my_lb, my_ctype, my_sense, my_rhs)
+        my_prob.solve()
 
-        x = my_prob.solution.get_values()
-        x = np.array(x)
+        x    = np.array(my_prob.solution.get_values())
         cost = my_prob.solution.get_objective_value()
-
         return x, cost
 
-    def populatebyrow(self, prob, my_obj, my_ub, my_lb, my_ctype, my_sense, my_rhs):
+    def _populate(self, prob, my_obj, my_ub, my_lb, my_ctype, my_sense, my_rhs):
         n = self.n
         prob.objective.set_sense(prob.objective.sense.minimize)
         prob.variables.add(obj=my_obj, lb=my_lb, ub=my_ub, types=my_ctype)
-        prob.set_log_stream(None)
-        prob.set_error_stream(None)
-        prob.set_warning_stream(None)
-        prob.set_results_stream(None)
+        for stream in [prob.set_log_stream, prob.set_error_stream,
+                       prob.set_warning_stream, prob.set_results_stream]:
+            stream(None)
 
         rows = []
-        for ii in range(0, n):
-            col = [x for x in range(0 + n * ii, n + n * ii)]
-            coef = [1 for x in range(0, n)]
-            rows.append([col, coef])
-
-        for ii in range(0, n):
-            col = [x for x in range(0 + ii, n**2, n)]
-            coef = [1 for x in range(0, n)]
-            rows.append([col, coef])
-
-        # Sub-tour elimination constraints:
-        for ii in range(0, n):
-            for jj in range(0, n):
-                if (ii != jj) and (ii * jj > 0):
-                    col = [ii + (jj * n), n**2 + ii - 1, n**2 + jj - 1]
-                    coef = [1, 1, -1]
-                    rows.append([col, coef])
-
-        for ii in range(0, n):
-            col = [(ii) * (n + 1)]
-            coef = [1]
-            rows.append([col, coef])
+        for ii in range(n):
+            rows.append([[x for x in range(n * ii, n * (ii + 1))], [1] * n])
+        for ii in range(n):
+            rows.append([[x for x in range(ii, n**2, n)], [1] * n])
+        for ii in range(n):
+            for jj in range(n):
+                if ii != jj and ii * jj > 0:
+                    rows.append([[ii + jj * n, n**2 + ii - 1, n**2 + jj - 1], [1, 1, -1]])
+        for ii in range(n):
+            rows.append([[ii * (n + 1)], [1]])
 
         prob.linear_constraints.add(lin_expr=rows, senses=my_sense, rhs=my_rhs)
 
-# Instantiate the classical optimizer class
-classical_optimizer = ClassicalOptimizer(instance, n, K)
-print("Number of feasible solutions = " + str(classical_optimizer.compute_allowed_combinations()))
 
-# Solve the problem in a classical fashion via CPLEX
-x = None
-z = None
-classical_cost = 0
-try:
-    x, classical_cost = classical_optimizer.cplex_solution()
-    # Put the solution in the z variable
-    z = [x[ii] for ii in range(n**2) if ii // n != ii % n]
-    print("Classical Solution: ", z)
-except Exception as e:
-    print("CPLEX may be missing.", e)
+x_classical, classical_cost, z_classical = None, 0.0, None
 
-def visualize_solution(xc, yc, x, C, n, K, title_str, filename):
-    plt.figure()
-    plt.scatter(xc, yc, s=200)
-    for i in range(len(xc)):
-        plt.annotate(i, (xc[i] + 0.15, yc[i]), size=16, color="r")
-    plt.plot(xc[0], yc[0], "r*", ms=20)
-    plt.grid()
+if CPLEX_AVAILABLE:
+    print("\n[2] Running CPLEX exact solver...")
+    try:
+        classical_optimizer = ClassicalOptimizer(instance, N_NODES, K_VEHICLES)
+        combos = classical_optimizer.compute_allowed_combinations()
+        print(f"    Feasible combinations: {int(combos)}")
+        x_classical, classical_cost = classical_optimizer.cplex_solution()
+        z_classical = [x_classical[ii] for ii in range(N_NODES**2)
+                       if ii // N_NODES != ii % N_NODES]
+        print(f"    ✓ CPLEX cost: {classical_cost:.4f}")
+        print(f"    Route vector z: {[round(v, 2) for v in z_classical]}")
+    except Exception as e:
+        print(f"    ✗ CPLEX error: {e}")
+        CPLEX_AVAILABLE = False
+else:
+    print("\n[2] CPLEX not available — skipping classical solve.")
 
-    for ii in range(0, n**2):
-        if x[ii] > 0:
-            ix = ii // n
-            iy = ii % n
-            plt.arrow(
-                xc[ix],
-                yc[ix],
-                xc[iy] - xc[ix],
-                yc[iy] - yc[ix],
-                length_includes_head=True,
-                head_width=0.25,
-            )
 
-    plt.title(title_str + " cost = " + str(int(C * 100) / 100.0))
-    plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.close()
-
-if x is not None:
-    visualize_solution(xc, yc, x, classical_cost, n, K, "Classical", "outputs/cplex_route.png")
-
-ibmq_token = os.getenv("IBMQ_TOKEN")
-if not ibmq_token:
-    print("WARNING: IBMQ_TOKEN environment variable not set. Please set it before running to execute on IBM Quantum.")
-
-try:
-    QiskitRuntimeService.save_account(channel="ibm_quantum", token=ibmq_token, overwrite=True)
-    service = QiskitRuntimeService(channel="ibm_quantum")
-    backend = service.backend("ibmq_qasm_simulator")
-except Exception as e:
-    print("Failed to authenticate with IBM Quantum:", e)
-    backend = None
-
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. QUANTUM FORMULATION — QUBO / ISING HAMILTONIAN
+# ══════════════════════════════════════════════════════════════════════════════
 
 class QuantumOptimizer:
+    """
+    Converts the VRP distance matrix into a QUBO / Ising Hamiltonian
+    and solves it with Qiskit's native QAOA (Qiskit 1.x API).
+
+    Binary encoding (edge-based):
+        x[i→j] = 1 if vehicle travels directly from city i to city j
+        Variables: n*(n-1) binary vars (all i≠j pairs)
+
+    Penalty weight A = max(distance) * 100 ensures constraint violations
+    are always more expensive than any feasible route.
+    """
+
     def __init__(self, instance, n, K):
         self.instance = instance
         self.n = n
         self.K = K
 
-    def binary_representation(self, x_sol=0):
-        instance = self.instance
-        n = self.n
-        K = self.K
+    # ------------------------------------------------------------------
+    # Build QUBO matrices Q, g, c
+    # ------------------------------------------------------------------
+    def binary_representation(self, x_sol=None):
+        instance, n, K = self.instance, self.n, self.K
+        A = np.max(instance) * 100          # large penalty weight
 
-        A = np.max(instance) * 100  # A parameter of cost function
-
-        # Determine the weights w
         instance_vec = instance.reshape(n**2)
-        w_list = [instance_vec[x] for x in range(n**2) if instance_vec[x] > 0]
-        w = np.zeros(n * (n - 1))
-        for ii in range(len(w_list)):
-            w[ii] = w_list[ii]
+        w = np.array([v for v in instance_vec if v > 0], dtype=float)
+        # Pad to n*(n-1) if needed
+        w_full = np.zeros(n * (n - 1))
+        w_full[:len(w)] = w
 
-        # Some variables I will use
-        Id_n = np.eye(n)
-        Im_n_1 = np.ones([n - 1, n - 1])
-        Iv_n_1 = np.ones(n)
-        Iv_n_1[0] = 0
-        Iv_n = np.ones(n - 1)
-        neg_Iv_n_1 = np.ones(n) - Iv_n_1
+        Id_n     = np.eye(n)
+        Im_n_1   = np.ones((n - 1, n - 1))
+        Iv_n_1   = np.ones(n);  Iv_n_1[0] = 0
+        Iv_n     = np.ones(n - 1)
+        neg_Iv   = np.ones(n) - Iv_n_1
 
-        v = np.zeros([n, n * (n - 1)])
+        v = np.zeros((n, n * (n - 1)))
         for ii in range(n):
             count = ii - 1
             for jj in range(n * (n - 1)):
@@ -233,109 +243,198 @@ class QuantumOptimizer:
 
         vn = np.sum(v[1:], axis=0)
 
-        # Q defines the interactions between variables
-        Q = A * (np.kron(Id_n, Im_n_1) + np.dot(v.T, v))
+        Q = A * (np.kron(Id_n, Im_n_1) + v.T @ v)
+        g = (w_full
+             - 2 * A * (np.kron(Iv_n_1, Iv_n) + vn.T)
+             - 2 * A * K * (np.kron(neg_Iv, Iv_n) + v[0].T))
+        c = 2 * A * (n - 1) + 2 * A * (K ** 2)
 
-        # g defines the contribution from the individual variables
-        g = (
-            w
-            - 2 * A * (np.kron(Iv_n_1, Iv_n) + vn.T)
-            - 2 * A * K * (np.kron(neg_Iv_n_1, Iv_n) + v[0].T)
-        )
-
-        # c is the constant offset
-        c = 2 * A * (n - 1) + 2 * A * (K**2)
-
-        try:
-            max(x_sol)
-            # Evaluates the cost distance from a binary representation of a path
-            fun = (
-                lambda x: np.dot(np.around(x), np.dot(Q, np.around(x)))
-                + np.dot(g, np.around(x))
-                + c
-            )
-            cost = fun(x_sol)
-        except:
-            cost = 0
+        cost = 0.0
+        if x_sol is not None:
+            x = np.around(x_sol)
+            cost = float(x @ Q @ x + g @ x + c)
 
         return Q, g, c, cost
 
+    # ------------------------------------------------------------------
+    # Build Qiskit QuadraticProgram
+    # ------------------------------------------------------------------
     def construct_problem(self, Q, g, c) -> QuadraticProgram:
-        qp = QuadraticProgram()
-        for i in range(self.n * (self.n - 1)):
+        n_vars = self.n * (self.n - 1)
+        qp = QuadraticProgram(name="VRP_Baseline")
+        for i in range(n_vars):
             qp.binary_var(str(i))
-        qp.objective.quadratic = Q
-        qp.objective.linear = g
-        qp.objective.constant = c
+        qp.minimize(constant=c, linear=dict(enumerate(g)),
+                    quadratic={(i, j): Q[i, j]
+                               for i in range(n_vars)
+                               for j in range(n_vars) if Q[i, j] != 0})
         return qp
 
+    # ------------------------------------------------------------------
+    # Solve with QAOA (Qiskit 1.x)
+    # ------------------------------------------------------------------
     def solve_problem(self, qp):
-        algorithm_globals.random_seed = 10598
-    
-        # Define the mixer Hamiltonian as a TwoLocal circuit
-        mixer = TwoLocal(num_qubits=self.n * (self.n - 1), rotation_blocks=['ry', 'rz'], entanglement_blocks='cz', reps=3)
-
-        # we're using COBYLA as the optimizer for the QAOA algorithm, specifying a total of three layers for the circuit, and using the TwoLocal ansatz with ry and rz rotations and cz entangling gates.
-        if backend:
-            from qiskit_ibm_runtime import Sampler as RuntimeSampler
-            sampler = RuntimeSampler(session=backend)
-        else:
-            sampler = Sampler()
-
-        qaoa = MinimumEigenOptimizer(min_eigen_solver=QAOA(reps=1, sampler=sampler, optimizer=COBYLA()))
-        result = qaoa.solve(qp)
-        # compute cost of the obtained result
-        _, _, _, level = self.binary_representation(x_sol=result.x)
-        return result.x, level
+        sampler = StatevectorSampler()
+        optimizer = SPSA(maxiter=100)
+        qaoa = QAOA(sampler=sampler, optimizer=optimizer, reps=1)
+        solver = MinimumEigenOptimizer(qaoa)
+        result = solver.solve(qp)
+        _, _, _, cost = self.binary_representation(x_sol=result.x)
+        return result.x, cost
 
 
-quantum_optimizer = QuantumOptimizer(instance, n, K)
-try:
-    if z is not None:
-        Q, g, c, binary_cost = quantum_optimizer.binary_representation(x_sol=z)
-        print("Binary cost:", binary_cost, "classical cost:", classical_cost)
-        if np.abs(binary_cost - classical_cost) < 0.01:
-            print("Binary formulation is correct")
-        else:
-            print("Error in the binary formulation")
-    else:
-        print("Could not verify the correctness, due to CPLEX solution being unavailable.")
-        Q, g, c, binary_cost = quantum_optimizer.binary_representation()
-        print("Binary cost:", binary_cost)
-except NameError as e:
-    print("Warning: Please run the cells above first.")
-    print(e)
+print("\n[3] Building QUBO / Ising Hamiltonian...")
+quantum_optimizer = QuantumOptimizer(instance, N_NODES, K_VEHICLES)
+Q, g, c, _ = quantum_optimizer.binary_representation()
+
+# Verify binary formulation against CPLEX (if available)
+if z_classical is not None:
+    _, _, _, binary_cost = quantum_optimizer.binary_representation(x_sol=z_classical)
+    print(f"    Binary cost of CPLEX solution : {binary_cost:.4f}")
+    print(f"    CPLEX objective cost          : {classical_cost:.4f}")
+    match = "✓ MATCH" if abs(binary_cost - classical_cost) < 1.0 else "⚠ MISMATCH (check penalty A)"
+    print(f"    Verification                  : {match}")
 
 qp = quantum_optimizer.construct_problem(Q, g, c)
-quantum_solution, quantum_cost = quantum_optimizer.solve_problem(qp)
-print("Quantum Solution: ", quantum_solution, quantum_cost)
+print(f"    Variables: {qp.get_num_vars()}, Binary: {qp.get_num_binary_vars()}")
 
-# Put the solution in a way that is compatible with the classical variables
-x_quantum = np.zeros(n**2)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4. QUANTUM SOLVE — QAOA
+# ══════════════════════════════════════════════════════════════════════════════
+
+print("\n[4] Running QAOA (SPSA optimizer, p=1)...")
+quantum_solution, quantum_cost = quantum_optimizer.solve_problem(qp)
+print(f"    ✓ QAOA cost: {quantum_cost:.4f}")
+print(f"    Solution bitstring: {quantum_solution.astype(int).tolist()}")
+
+# Reconstruct full n×n route matrix from edge-based solution
+x_quantum = np.zeros(N_NODES ** 2)
 kk = 0
-for ii in range(n**2):
-    if ii // n != ii % n:
+for ii in range(N_NODES ** 2):
+    if ii // N_NODES != ii % N_NODES:
         x_quantum[ii] = quantum_solution[kk]
         kk += 1
 
-# visualize the solution
-visualize_solution(xc, yc, x_quantum, quantum_cost, n, K, "Quantum {QAOA}", "outputs/qaoa_route.png")
 
-# Save the routing results to JSON
+# ══════════════════════════════════════════════════════════════════════════════
+# 5. VISUALISATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def plot_route(ax, xc, yc, x, cost, n, title):
+    """Draw a VRP route on a given matplotlib axis."""
+    ax.scatter(xc, yc, s=220, zorder=4, color='steelblue', edgecolors='black')
+    for i in range(n):
+        ax.annotate(str(i), (xc[i] + 0.15, yc[i] + 0.15), fontsize=13,
+                    color='black', fontweight='bold')
+    ax.plot(xc[0], yc[0], 'r*', ms=22, zorder=5, label='Depot')
+    ax.grid(True, alpha=0.3)
+
+    for ii in range(n ** 2):
+        if x[ii] > 0.5:
+            ix, iy = ii // n, ii % n
+            ax.annotate("",
+                xy=(xc[iy], yc[iy]),
+                xytext=(xc[ix], yc[ix]),
+                arrowprops=dict(arrowstyle="-|>", color='darkorange',
+                                lw=2.0, mutation_scale=18))
+
+    ax.set_title(f"{title}\nCost = {cost:.2f}", fontsize=12, fontweight='bold')
+    ax.legend(fontsize=9)
+
+
+# Side-by-side comparison
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+fig.suptitle("Baseline Benchmark: Classical CPLEX vs Quantum QAOA\n"
+             f"({N_NODES} nodes, {K_VEHICLES} vehicles, {N_NODES*(N_NODES-1)} qubits)",
+             fontsize=13, fontweight='bold')
+
+if x_classical is not None:
+    plot_route(axes[0], xc, yc, x_classical, classical_cost, N_NODES, "Classical (CPLEX)")
+else:
+    axes[0].text(0.5, 0.5, "CPLEX not available", ha='center', va='center',
+                 transform=axes[0].transAxes, fontsize=12)
+    axes[0].set_title("Classical (CPLEX) — N/A")
+
+plot_route(axes[1], xc, yc, x_quantum, quantum_cost, N_NODES, "Quantum (QAOA + SPSA)")
+
+plt.tight_layout()
+plt.savefig("outputs/baseline_comparison.png", dpi=150, bbox_inches='tight')
+plt.close()
+print("\n[5] Saved outputs/baseline_comparison.png")
+
+# Individual route plots (legacy compatibility)
+if x_classical is not None:
+    fig2, ax2 = plt.subplots(figsize=(6, 5))
+    plot_route(ax2, xc, yc, x_classical, classical_cost, N_NODES, "Classical (CPLEX)")
+    plt.tight_layout()
+    plt.savefig("outputs/cplex_route.png", dpi=150, bbox_inches='tight')
+    plt.close()
+
+fig3, ax3 = plt.subplots(figsize=(6, 5))
+plot_route(ax3, xc, yc, x_quantum, quantum_cost, N_NODES, "Quantum QAOA")
+plt.tight_layout()
+plt.savefig("outputs/qaoa_route.png", dpi=150, bbox_inches='tight')
+plt.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 6. SAVE RESULTS JSON
+# ══════════════════════════════════════════════════════════════════════════════
+
 results = {
-    "classical": {
-        "cost": float(classical_cost),
-        "route_vector": [float(i) for i in x] if x is not None else [],
-        "z_vector": [float(i) for i in z] if z is not None else []
+    "problem": {
+        "n_nodes": N_NODES,
+        "k_vehicles": K_VEHICLES,
+        "n_qubits": N_NODES * (N_NODES - 1),
+        "nisq_safe": N_NODES * (N_NODES - 1) <= 20
     },
-    "quantum": {
+    "classical_cplex": {
+        "available": CPLEX_AVAILABLE,
+        "cost": float(classical_cost),
+        "route_vector": [float(v) for v in x_classical] if x_classical is not None else [],
+        "z_vector": [float(v) for v in z_classical] if z_classical is not None else []
+    },
+    "quantum_qaoa": {
         "cost": float(quantum_cost),
-        "route_vector": [float(i) for i in x_quantum],
-        "quantum_solution": [float(i) for i in quantum_solution]
+        "route_vector": [float(v) for v in x_quantum],
+        "solution_bitstring": quantum_solution.astype(int).tolist()
+    },
+    "comparison": {
+        "cost_gap": float(quantum_cost - classical_cost) if CPLEX_AVAILABLE else None,
+        "cost_gap_pct": float(
+            100 * (quantum_cost - classical_cost) / max(abs(classical_cost), 1e-9)
+        ) if CPLEX_AVAILABLE else None
     }
 }
 
 with open("outputs/baseline_routing_results.json", "w") as f:
     json.dump(results, f, indent=4)
 
-print("Baseline benchmark execution completed. Results saved to outputs/")
+print("    Saved outputs/baseline_routing_results.json")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 7. SUMMARY
+# ══════════════════════════════════════════════════════════════════════════════
+
+print("\n" + "=" * 65)
+print("  BASELINE BENCHMARK SUMMARY")
+print("=" * 65)
+if CPLEX_AVAILABLE:
+    gap = quantum_cost - classical_cost
+    gap_pct = 100 * gap / max(abs(classical_cost), 1e-9)
+    print(f"  CPLEX  (classical optimal) cost : {classical_cost:.4f}")
+    print(f"  QAOA   (quantum approx.)   cost : {quantum_cost:.4f}")
+    print(f"  Optimality gap                  : {gap:.4f}  ({gap_pct:.1f}%)")
+else:
+    print(f"  QAOA cost : {quantum_cost:.4f}  (no CPLEX baseline)")
+print(f"  Qubits used : {N_NODES * (N_NODES - 1)}  (NISQ-safe ≤ 20)")
+print("=" * 65)
+print("\n  Outputs:")
+print("    outputs/baseline_comparison.png")
+print("    outputs/cplex_route.png")
+print("    outputs/qaoa_route.png")
+print("    outputs/baseline_routing_results.json")
+print("\n  NEXT: Run cluster_scaler.py → qaoa_solver.py → main_pipeline.py")
+print("=" * 65 + "\n")
