@@ -22,6 +22,13 @@ OUTPUT:
     - distance_matrices/     : One .npy distance matrix per cluster
                                (ready to feed into QAOA circuit)
 """
+import sys, os
+# Ensure project root is on path and cwd is project root
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, os.path.join(_ROOT, "src"))
+os.chdir(_ROOT)
+
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -227,7 +234,7 @@ for bar, q in zip(bars, qubit_counts):
 
 plt.tight_layout()
 plt.savefig("cluster_map.png", dpi=150, bbox_inches='tight')
-plt.show()
+plt.close()
 print("\n[6] Saved cluster_map.png")
 
 # ── Final Summary ──────────────────────────────────────────────────────────────

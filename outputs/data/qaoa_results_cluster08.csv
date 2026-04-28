@@ -1,0 +1,2 @@
+cluster_id,depth,trial,cost,bitstring,method
+8,1,0,-2964.5945781445816,11,numpy_exact

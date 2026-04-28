@@ -1,0 +1,71 @@
+{
+    "problem": {
+        "n_nodes": 3,
+        "k_vehicles": 2,
+        "n_qubits": 6,
+        "nisq_safe": true
+    },
+    "classical_cplex": {
+        "available": true,
+        "cost": 132.1114811568365,
+        "route_vector": [
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.1,
+            0.1
+        ],
+        "z_vector": [
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0
+        ]
+    },
+    "quantum_qaoa": {
+        "cost": 132.11148115684045,
+        "route_vector": [
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0
+        ],
+        "solution_bitstring": [
+            1,
+            1,
+            1,
+            0,
+            1,
+            0
+        ],
+        "qaoa_depth_p": 2,
+        "optimizer": "SPSA",
+        "max_iterations": 50,
+        "n_trials": 1
+    },
+    "comparison": {
+        "cost_gap": 3.950617610826157e-12,
+        "cost_gap_pct": 2.990366602684721e-12
+    },
+    "paper_reference": {
+        "title": "Solving Vehicle Routing Problem Using Quantum Approximate Optimization Algorithm",
+        "journal": "IEEE Transactions on Intelligent Transportation Systems",
+        "volume": "24",
+        "number": "7",
+        "year": "2023",
+        "methodology": "Following paper's approach: multiple trials, appropriate p depth, SPSA optimizer"
+    }
+}

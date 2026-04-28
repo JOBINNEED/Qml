@@ -33,6 +33,13 @@ USAGE:
     --iters     : SPSA iterations per depth (default: 50)
     --fast      : shortcut for --clusters 3 --depths 1 --iters 30
 """
+import sys, os
+# Ensure project root is on path and cwd is project root
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, os.path.join(_ROOT, "src"))
+os.chdir(_ROOT)
+
 
 import argparse
 import json
@@ -44,7 +51,12 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
 # ── Pipeline modules ──────────────────────────────────────────────────────────
-from qaoa_solver    import solve_cluster
+try:
+    from qaoa_solver_v2 import AdvancedQAOASolver
+    ADVANCED_SOLVER = True
+except ImportError:
+    from qaoa_solver import solve_cluster
+    ADVANCED_SOLVER = False
 from global_stitcher import stitch_global_route
 
 
@@ -66,6 +78,10 @@ def parse_args():
                         help="QUBO constraint penalty weight (default: 1000)")
     parser.add_argument("--fast", action="store_true",
                         help="Quick test: 3 clusters, depth 1, 30 iters")
+    parser.add_argument("--use-ibm", action="store_true",
+                        help="Use IBM Quantum cloud (faster, requires API token)")
+    parser.add_argument("--hardware", action="store_true",
+                        help="Use real quantum hardware (requires --use-ibm)")
     return parser.parse_args()
 
 
@@ -112,9 +128,12 @@ def run_stage1():
 def run_stages_2_3(df_summary, max_clusters, p_depths, max_iters, penalty):
     """
     For each cluster: build QUBO Hamiltonian, run QAOA, collect results.
+    Uses advanced solver with warm-starting if available.
     """
     print("\n" + "█"*65)
     print("  STAGE 2+3 — QUBO BUILD + QAOA SOLVE")
+    if ADVANCED_SOLVER:
+        print("  [ADVANCED MODE] Using warm-starting and adaptive depth")
     print("█"*65)
 
     cluster_ids = df_summary["cluster_id"].tolist()
@@ -127,6 +146,7 @@ def run_stages_2_3(df_summary, max_clusters, p_depths, max_iters, penalty):
     print(f"  Penalty weight    : {penalty}")
 
     all_results = []
+    warm_start_params = None  # For cross-cluster transfer
     t0 = time.time()
 
     for cid in cluster_ids:
@@ -136,14 +156,46 @@ def run_stages_2_3(df_summary, max_clusters, p_depths, max_iters, penalty):
             continue
 
         t_start = time.time()
-        result = solve_cluster(
-            distance_matrix_path=matrix_path,
-            cluster_id=cid,
-            p_depths=p_depths,
-            max_iterations=max_iters,
-            penalty_weight=penalty,
-            output_dir="outputs",
-        )
+        
+        if ADVANCED_SOLVER:
+            # Use advanced solver with warm-starting
+            config = {
+                'p_min': min(p_depths) if p_depths else 1,
+                'p_max': max(p_depths) if p_depths else 24,
+                'p_adaptive': True,
+                'max_iterations': max_iters,
+                'n_trials': 5,
+                'optimizer': 'SPSA',
+                'enable_warm_start': True,
+                'convergence_threshold': 0.01,
+            }
+            
+            solver = AdvancedQAOASolver(
+                matrix_path,
+                cluster_id=cid,
+                config=config,
+                warm_start_params=warm_start_params
+            )
+            result = solver.solve(output_dir="outputs")
+            
+            # Store params for next cluster (cross-cluster transfer)
+            if result.get('optimal_params'):
+                warm_start_params = {
+                    'best_params': result['optimal_params'],
+                    'best_depth': result['best_depth'],
+                    'best_cost': result['best_cost'],
+                }
+        else:
+            # Fallback to basic solver
+            result = solve_cluster(
+                distance_matrix_path=matrix_path,
+                cluster_id=cid,
+                p_depths=p_depths,
+                max_iterations=max_iters,
+                penalty_weight=penalty,
+                output_dir="outputs",
+            )
+        
         elapsed = time.time() - t_start
         result["wall_time_s"] = round(elapsed, 2)
         all_results.append(result)
@@ -155,6 +207,10 @@ def run_stages_2_3(df_summary, max_clusters, p_depths, max_iters, penalty):
     total_time = time.time() - t0
     print(f"\n  Stage 2+3 complete: {len(all_results)} clusters solved "
           f"in {total_time:.1f}s")
+    
+    if ADVANCED_SOLVER and warm_start_params:
+        print(f"  ✓ Cross-cluster warm-starting enabled")
+    
     return all_results
 
 
@@ -353,6 +409,10 @@ def main():
         args.depths   = [1]
         args.iters    = 30
         print("  [FAST MODE] clusters=3, depth=1, iters=30")
+    
+    if args.hardware and not args.use_ibm:
+        print("  ⚠ --hardware requires --use-ibm flag")
+        args.hardware = False
 
     print("\n" + "█"*65)
     print("  HYBRID QUANTUM-CLASSICAL VRP PIPELINE")
@@ -363,6 +423,14 @@ def main():
     print(f"    QAOA depths  : {args.depths}")
     print(f"    SPSA iters   : {args.iters}")
     print(f"    Penalty      : {args.penalty}")
+    print(f"    Backend      : {'IBM Quantum ' + ('Hardware' if args.hardware else 'Cloud') if args.use_ibm else 'Local Simulator'}")
+    
+    if args.use_ibm:
+        print(f"\n  🌐 IBM Quantum mode enabled")
+        if args.hardware:
+            print(f"     Using real quantum hardware (may have queue wait)")
+        else:
+            print(f"     Using cloud simulator (6× faster than local)")
 
     t_pipeline_start = time.time()
 

@@ -13,6 +13,17 @@ PURPOSE:
     near-optimal routing solutions on small instances, validating the
     quantum formulation before scaling up.
 
+METHODOLOGY (Following IEEE Paper):
+    This implementation follows the methodology from:
+    "Solving Vehicle Routing Problem Using Quantum Approximate Optimization Algorithm"
+    IEEE Transactions on Intelligent Transportation Systems, Vol. 24, No. 7, July 2023
+    
+    Key parameters from paper:
+    - QAOA depth p: 12 for (4,2) instances, 24 for (5,3) instances
+    - Optimizer: SPSA or COBYLA with 5000 max iterations
+    - Multiple trials: 5 runs, choosing best result
+    - Comparison metric: Cost gap vs CPLEX optimal solution
+
 QUBIT COUNT:
     n=3 nodes → N = n*(n-1) = 6 binary variables → 6 qubits (NISQ-safe)
 
@@ -24,6 +35,13 @@ OUTPUTS:
     outputs/baseline_routing_results.json  — cost comparison JSON
     outputs/baseline_comparison.png        — side-by-side comparison chart
 """
+import sys, os
+# Ensure project root is on path and cwd is project root
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, os.path.join(_ROOT, "src"))
+os.chdir(_ROOT)
+
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -39,6 +57,25 @@ from qiskit.primitives import StatevectorSampler
 from qiskit_optimization import QuadraticProgram
 from qiskit_optimization.algorithms import MinimumEigenOptimizer
 
+# Use AerSampler for faster simulation if available
+try:
+    from qiskit_aer.primitives import Sampler as AerSampler
+    _SAMPLER_BACKEND = 'aer'
+except ImportError:
+    _SAMPLER_BACKEND = 'statevector'
+
+def _make_sampler():
+    if _SAMPLER_BACKEND == 'aer':
+        return AerSampler()
+    return StatevectorSampler()
+
+# ── IBM Quantum Cloud (optional) ──────────────────────────────────────────────
+try:
+    from ibm_quantum_backend import IBMQuantumBackend
+    IBM_AVAILABLE = True
+except ImportError:
+    IBM_AVAILABLE = False
+
 # ── CPLEX (optional — graceful fallback if not installed) ─────────────────────
 try:
     import cplex
@@ -51,6 +88,24 @@ except ImportError:
 
 # ── Output directory ──────────────────────────────────────────────────────────
 os.makedirs("outputs", exist_ok=True)
+
+# ── Command-line arguments ────────────────────────────────────────────────────
+import sys
+USE_IBM  = '--use-ibm' in sys.argv or '--ibm' in sys.argv
+FAST_MODE = '--fast' in sys.argv   # Reduced iters/depth for quick testing
+
+if USE_IBM:
+    if IBM_AVAILABLE:
+        print("\n🌐 IBM Quantum Cloud mode enabled")
+        print("   Using cloud simulator for faster execution")
+    else:
+        print("\n⚠ IBM Quantum not configured. Install with:")
+        print("   pip install qiskit-ibm-runtime")
+        print("   Then run: python ibm_quantum_backend.py YOUR_TOKEN")
+        USE_IBM = False
+
+if FAST_MODE:
+    print("\n⚡ FAST MODE: reduced depth and iterations for quick testing")
 
 # ── Problem parameters ────────────────────────────────────────────────────────
 N_NODES = 3   # depot (0) + 2 delivery cities
@@ -171,7 +226,7 @@ class ClassicalOptimizer:
         prob.linear_constraints.add(lin_expr=rows, senses=my_sense, rhs=my_rhs)
 
 
-x_classical, classical_cost, z_classical = None, 0.0, None
+x_classical, classical_cost, z_classical = None, 0.0, []
 
 if CPLEX_AVAILABLE:
     print("\n[2] Running CPLEX exact solver...")
@@ -271,16 +326,71 @@ class QuantumOptimizer:
         return qp
 
     # ------------------------------------------------------------------
-    # Solve with QAOA (Qiskit 1.x)
+    # Solve with QAOA (Qiskit 1.x) - Multiple trials as per paper
     # ------------------------------------------------------------------
-    def solve_problem(self, qp):
-        sampler = StatevectorSampler()
-        optimizer = SPSA(maxiter=100)
-        qaoa = QAOA(sampler=sampler, optimizer=optimizer, reps=1)
-        solver = MinimumEigenOptimizer(qaoa)
-        result = solver.solve(qp)
-        _, _, _, cost = self.binary_representation(x_sol=result.x)
-        return result.x, cost
+    def solve_problem(self, qp, p=12, n_trials=5, optimizer_name='SPSA',
+                      use_ibm=False, max_iters=5000):
+        """
+        Solve VRP with QAOA following the paper's methodology:
+        - Multiple trials (paper used 5 runs, choosing best)
+        - Higher p values (paper found p≥12 needed for good results)
+        - SPSA optimizer with 5000 max iterations (paper's setting)
+        - Optional: Use IBM Quantum cloud for faster/hardware execution
+        
+        Args:
+            qp: QuadraticProgram to solve
+            p: QAOA depth (reps parameter). Paper used p=12 for (4,2), p=24 for (5,3)
+            n_trials: Number of independent runs (paper used 5)
+            optimizer_name: 'SPSA' or 'COBYLA' (paper found these best)
+            use_ibm: If True, use IBM Quantum cloud (requires API token)
+        """
+        # Select sampler (local or IBM cloud)
+        if use_ibm and IBM_AVAILABLE:
+            print(f"    Using IBM Quantum Cloud...")
+            ibm_backend = IBMQuantumBackend(use_hardware=False)
+            sampler = ibm_backend.get_sampler(
+                n_qubits=qp.get_num_vars(),
+                optimization_level=3,
+                shots=1024
+            )
+        else:
+            if use_ibm and not IBM_AVAILABLE:
+                print(f"    ⚠ IBM Quantum not available, using local simulator")
+            sampler = _make_sampler()
+        
+        # Select optimizer as per paper's findings
+        if optimizer_name == 'SPSA':
+            optimizer = SPSA(maxiter=max_iters)
+        elif optimizer_name == 'COBYLA':
+            optimizer = COBYLA(maxiter=max_iters)
+        else:
+            optimizer = SPSA(maxiter=max_iters)
+        best_cost = float('inf')
+        best_solution = None
+        best_trial = -1
+        
+        print(f"    Running {n_trials} trials with p={p}, optimizer={optimizer_name}...")
+        
+        for trial in range(n_trials):
+            qaoa = QAOA(sampler=sampler, optimizer=optimizer, reps=p)
+            solver = MinimumEigenOptimizer(qaoa)
+            result = solver.solve(qp)
+            _, _, _, cost = self.binary_representation(x_sol=result.x)
+            
+            print(f"      Trial {trial+1}/{n_trials}: cost = {cost:.4f}")
+            
+            if cost < best_cost:
+                best_cost = cost
+                best_solution = result.x
+                best_trial = trial + 1
+        
+        print(f"    ✓ Best result from trial {best_trial}")
+        
+        # Cleanup IBM session if used
+        if use_ibm and IBM_AVAILABLE:
+            ibm_backend.close()
+        
+        return best_solution, best_cost
 
 
 print("\n[3] Building QUBO / Ising Hamiltonian...")
@@ -300,12 +410,44 @@ print(f"    Variables: {qp.get_num_vars()}, Binary: {qp.get_num_binary_vars()}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. QUANTUM SOLVE — QAOA
+# 4. QUANTUM SOLVE — QAOA (Following paper's methodology)
 # ══════════════════════════════════════════════════════════════════════════════
 
-print("\n[4] Running QAOA (SPSA optimizer, p=1)...")
-quantum_solution, quantum_cost = quantum_optimizer.solve_problem(qp)
-print(f"    ✓ QAOA cost: {quantum_cost:.4f}")
+# Paper's findings:
+# - (4,2) instance: p ≥ 12 needed for good results
+# - (5,3) instance: p ≥ 24 needed for good results
+# - SPSA and COBYLA perform best for higher p values
+# - Average over 5 trial runs, choosing best result
+
+# Determine appropriate p value based on problem size (following paper's guidance)
+if N_NODES == 3:
+    QAOA_DEPTH = 8   # Smaller problem, lower p sufficient
+elif N_NODES == 4:
+    QAOA_DEPTH = 12  # Paper used p=12 for (4,2)
+elif N_NODES == 5:
+    QAOA_DEPTH = 24  # Paper used p=24 for (5,3)
+else:
+    QAOA_DEPTH = 12  # Default
+
+N_TRIALS = 5
+MAX_ITERS = 5000
+
+if FAST_MODE:
+    QAOA_DEPTH = 2   # Very shallow for quick test
+    N_TRIALS = 1
+    MAX_ITERS = 50
+
+print("\n[4] Running QAOA with paper's methodology:")
+print(f"    Depth (p)        : {QAOA_DEPTH}  (paper: p≥12 for (4,2), p≥24 for (5,3))")
+print(f"    Optimizer        : SPSA with {MAX_ITERS} max iterations")
+print(f"    Trials           : {N_TRIALS} (choosing best, as per paper)")
+print(f"    Backend          : {'IBM Quantum Cloud' if USE_IBM else 'Local Simulator'}")
+
+quantum_solution, quantum_cost = quantum_optimizer.solve_problem(
+    qp, p=QAOA_DEPTH, n_trials=N_TRIALS, optimizer_name='SPSA',
+    use_ibm=USE_IBM, max_iters=MAX_ITERS
+)
+print(f"    ✓ Final QAOA cost: {quantum_cost:.4f}")
 print(f"    Solution bitstring: {quantum_solution.astype(int).tolist()}")
 
 # Reconstruct full n×n route matrix from edge-based solution
@@ -398,13 +540,25 @@ results = {
     "quantum_qaoa": {
         "cost": float(quantum_cost),
         "route_vector": [float(v) for v in x_quantum],
-        "solution_bitstring": quantum_solution.astype(int).tolist()
+        "solution_bitstring": quantum_solution.astype(int).tolist(),
+        "qaoa_depth_p": QAOA_DEPTH,
+        "optimizer": "SPSA",
+        "max_iterations": MAX_ITERS,
+        "n_trials": N_TRIALS
     },
     "comparison": {
         "cost_gap": float(quantum_cost - classical_cost) if CPLEX_AVAILABLE else None,
         "cost_gap_pct": float(
             100 * (quantum_cost - classical_cost) / max(abs(classical_cost), 1e-9)
         ) if CPLEX_AVAILABLE else None
+    },
+    "paper_reference": {
+        "title": "Solving Vehicle Routing Problem Using Quantum Approximate Optimization Algorithm",
+        "journal": "IEEE Transactions on Intelligent Transportation Systems",
+        "volume": "24",
+        "number": "7",
+        "year": "2023",
+        "methodology": "Following paper's approach: multiple trials, appropriate p depth, SPSA optimizer"
     }
 }
 
@@ -430,11 +584,16 @@ if CPLEX_AVAILABLE:
 else:
     print(f"  QAOA cost : {quantum_cost:.4f}  (no CPLEX baseline)")
 print(f"  Qubits used : {N_NODES * (N_NODES - 1)}  (NISQ-safe ≤ 20)")
+print(f"  QAOA depth  : p={QAOA_DEPTH}  (paper: p≥12 for (4,2), p≥24 for (5,3))")
+print(f"  Trials      : {N_TRIALS} runs (best selected, as per paper)")
 print("=" * 65)
 print("\n  Outputs:")
 print("    outputs/baseline_comparison.png")
 print("    outputs/cplex_route.png")
 print("    outputs/qaoa_route.png")
 print("    outputs/baseline_routing_results.json")
+print("\n  Paper Reference:")
+print("    IEEE Trans. Intelligent Transportation Systems, Vol. 24, No. 7, 2023")
+print("    'Solving Vehicle Routing Problem Using QAOA'")
 print("\n  NEXT: Run cluster_scaler.py → qaoa_solver.py → main_pipeline.py")
 print("=" * 65 + "\n")

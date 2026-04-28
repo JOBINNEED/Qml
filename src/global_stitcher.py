@@ -26,12 +26,20 @@ OUTPUTS:
     outputs/global_route.png          — full 50-city route visualisation
     outputs/global_route_results.json — route data and total cost
 """
+import sys, os
+# Ensure project root is on path and cwd is project root
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, os.path.join(_ROOT, "src"))
+os.chdir(_ROOT)
+
 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import pandas as pd
 import json
+import ast
 import os
 
 
@@ -169,7 +177,7 @@ def stitch_global_route(cluster_results: list,
 
     for cid in inter_order:
         row = df_summary[df_summary["cluster_id"] == cid].iloc[0]
-        node_indices = json.loads(row["node_indices"])   # global city indices
+        node_indices = ast.literal_eval(row["node_indices"])   # global city indices
 
         if cid in result_lookup:
             res = result_lookup[cid]
@@ -273,7 +281,7 @@ def _plot_global_route(global_route, cluster_routes, inter_order,
     depot = coords[0]
 
     for idx, (cid, row) in enumerate(df_summary.iterrows()):
-        node_indices = json.loads(row["node_indices"])
+        node_indices = ast.literal_eval(row["node_indices"])
         c = colors[idx % 20]
         cluster_coords = coords[node_indices]
         ax.scatter(cluster_coords[:, 0], cluster_coords[:, 1],

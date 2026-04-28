@@ -1,0 +1,3 @@
+Experiment,Nodes,Qubits,Cost,Gap vs Optimal,Time (s)
+Baseline (3 nodes),3,6,132.11148115684045,0.00%,N/A
+Full Pipeline (50 nodes),50,20 per cluster,2288.902631786572,N/A (no classical baseline),5.92

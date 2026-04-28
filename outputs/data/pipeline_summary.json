@@ -1,0 +1,191 @@
+{
+    "pipeline_config": {
+        "n_cities": 50,
+        "n_clusters": 17,
+        "clusters_solved": 17,
+        "qaoa_depths": [
+            1,
+            2,
+            3
+        ],
+        "spsa_iters": 300,
+        "penalty_weight": 1000.0
+    },
+    "qubit_stats": {
+        "max_qubits_used": 20,
+        "min_qubits_used": 2,
+        "avg_qubits_used": 11.882352941176471,
+        "nisq_limit": 20,
+        "all_nisq_safe": true
+    },
+    "cost_stats": {
+        "total_global_cost": 2288.902631786572,
+        "avg_cluster_cost": -17041.590648407146,
+        "min_cluster_cost": -41822.88706880463,
+        "max_cluster_cost": -2964.5945781445816
+    },
+    "performance": {
+        "total_wall_time_s": 5.92,
+        "avg_time_per_cluster": 0.34823529411764703
+    },
+    "global_route": {
+        "waypoints": 67,
+        "inter_cluster_order": [
+            6,
+            11,
+            10,
+            16,
+            5,
+            1,
+            14,
+            7,
+            8,
+            12,
+            13,
+            15,
+            3,
+            2,
+            0,
+            4,
+            9
+        ]
+    },
+    "cluster_results": [
+        {
+            "cluster_id": 0,
+            "best_depth": 1,
+            "best_cost": -16825.018603788743,
+            "n_qubits": 12,
+            "wall_time_s": 0.05,
+            "best_bitstring": "001010010100"
+        },
+        {
+            "cluster_id": 1,
+            "best_depth": 1,
+            "best_cost": -30547.85827066422,
+            "n_qubits": 20,
+            "wall_time_s": 1.21,
+            "best_bitstring": "01010010100001001000"
+        },
+        {
+            "cluster_id": 2,
+            "best_depth": 1,
+            "best_cost": -15933.03294787783,
+            "n_qubits": 20,
+            "wall_time_s": 1.06,
+            "best_bitstring": "01010010100001001000"
+        },
+        {
+            "cluster_id": 3,
+            "best_depth": 1,
+            "best_cost": -5259.022360701777,
+            "n_qubits": 6,
+            "wall_time_s": 0.04,
+            "best_bitstring": "100110"
+        },
+        {
+            "cluster_id": 4,
+            "best_depth": 1,
+            "best_cost": -26083.573689640845,
+            "n_qubits": 12,
+            "wall_time_s": 0.39,
+            "best_bitstring": "100100001001"
+        },
+        {
+            "cluster_id": 5,
+            "best_depth": 1,
+            "best_cost": -7980.655033610858,
+            "n_qubits": 6,
+            "wall_time_s": 0.08,
+            "best_bitstring": "011001"
+        },
+        {
+            "cluster_id": 6,
+            "best_depth": 1,
+            "best_cost": -8989.515536022445,
+            "n_qubits": 12,
+            "wall_time_s": 0.06,
+            "best_bitstring": "001010010100"
+        },
+        {
+            "cluster_id": 7,
+            "best_depth": 1,
+            "best_cost": -41006.91652093783,
+            "n_qubits": 20,
+            "wall_time_s": 1.18,
+            "best_bitstring": "11001000100000010001"
+        },
+        {
+            "cluster_id": 8,
+            "best_depth": 1,
+            "best_cost": -2964.5945781445816,
+            "n_qubits": 2,
+            "wall_time_s": 0.03,
+            "best_bitstring": "11"
+        },
+        {
+            "cluster_id": 9,
+            "best_depth": 1,
+            "best_cost": -41822.88706880463,
+            "n_qubits": 20,
+            "wall_time_s": 1.13,
+            "best_bitstring": "00110100010010001000"
+        },
+        {
+            "cluster_id": 10,
+            "best_depth": 1,
+            "best_cost": -16390.966371483235,
+            "n_qubits": 12,
+            "wall_time_s": 0.2,
+            "best_bitstring": "100100001001"
+        },
+        {
+            "cluster_id": 11,
+            "best_depth": 1,
+            "best_cost": -13615.645669740621,
+            "n_qubits": 12,
+            "wall_time_s": 0.07,
+            "best_bitstring": "010001100010"
+        },
+        {
+            "cluster_id": 12,
+            "best_depth": 1,
+            "best_cost": -6967.359737836205,
+            "n_qubits": 6,
+            "wall_time_s": 0.04,
+            "best_bitstring": "011001"
+        },
+        {
+            "cluster_id": 13,
+            "best_depth": 1,
+            "best_cost": -11801.306138004968,
+            "n_qubits": 12,
+            "wall_time_s": 0.2,
+            "best_bitstring": "001010010100"
+        },
+        {
+            "cluster_id": 14,
+            "best_depth": 1,
+            "best_cost": -24084.6385598678,
+            "n_qubits": 12,
+            "wall_time_s": 0.05,
+            "best_bitstring": "010001100010"
+        },
+        {
+            "cluster_id": 15,
+            "best_depth": 1,
+            "best_cost": -9435.722499600482,
+            "n_qubits": 12,
+            "wall_time_s": 0.09,
+            "best_bitstring": "100100001001"
+        },
+        {
+            "cluster_id": 16,
+            "best_depth": 1,
+            "best_cost": -9998.327436194475,
+            "n_qubits": 6,
+            "wall_time_s": 0.04,
+            "best_bitstring": "011001"
+        }
+    ]
+}
