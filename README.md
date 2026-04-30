@@ -51,30 +51,6 @@ We break through the scalability wall using a **4-stage hierarchical quantum-cla
 
 ---
 
-## 🚗 What Problem Does This Solve?
-
-### Real-World Application
-
-Imagine you run a delivery company with:
-- 50 customer locations across a city
-- Multiple delivery vehicles
-- Goal: Find the shortest routes to visit all customers
-
-**Classical Approach**: 
-- Exact solvers (CPLEX) take exponential time
-- Heuristics (genetic algorithms) give approximate solutions
-
-**Quantum Approach**:
-- QAOA can explore solution space more efficiently
-- But limited by current quantum hardware (NISQ devices)
-
-**Our Hybrid Approach**:
-- Divide the 50 cities into manageable clusters
-- Use quantum optimization for each cluster
-- Combine results into a global solution
-- **Benefit**: Quantum advantage within NISQ constraints
-
----
 
 ## ✨ Key Features & Innovations
 
@@ -85,8 +61,6 @@ Imagine you run a delivery company with:
 | **Max Problem Size** | 5 nodes | **50 nodes** (10× larger) |
 | **Qubit Requirement** | 20 qubits (fixed) | **≤20 qubits per cluster** (scalable) |
 | **Convergence Speed** | 100% (random init) | **40-60%** (warm-starting) |
-| **Constraint Satisfaction** | Not verified | **100% guaranteed** |
-| **Parameter Tuning** | Manual | **Automatic** |
 | **Cross-Cluster Learning** | No | **Yes** (progressive warm-start) |
 
 ### Technical Innovations
@@ -131,7 +105,7 @@ hybrid-quantum-vrp/
 │   ├── global_stitcher.py            # Stage 4: Assemble global route
 │   ├── main_pipeline.py              # End-to-end orchestrator
 │   ├── generate_comparison_report.py # Generate comparison tables
-│   ├── generate_report_graphs.py     # Generate 10 publication figures
+│   ├── generate_report_graphs.py     # Generate 10 figures
 │   └── ibm_quantum_backend.py        # IBM Quantum Cloud integration
 │
 ├── docs/                             # Documentation
@@ -149,7 +123,7 @@ hybrid-quantum-vrp/
 │   │   ├── cluster_map.png
 │   │   ├── global_route.png
 │   │   └── pipeline_overview.png
-│   └── report/                       # 10 publication-quality figures
+│   └── report/                       # 10 figures
 │       ├── fig1_scalability_wall.png
 │       ├── fig2_baseline_validation.png
 │       ├── fig3_cluster_map.png
@@ -583,228 +557,3 @@ config = {
 **Note:** QAOA mode is ~100× slower but demonstrates actual quantum circuit simulation.
 
 ---
-
-### IBM Quantum Cloud Setup
-
-For faster simulation or real quantum hardware access:
-
-1. **Create IBM Quantum account**: https://quantum.ibm.com/
-2. **Get API token**: Account → API Token
-3. **Create `.env` file** in project root:
-   ```bash
-   IBM_QUANTUM_TOKEN=your_token_here
-   ```
-4. **Install runtime**:
-   ```bash
-   pip install qiskit-ibm-runtime
-   ```
-5. **Run with IBM**:
-   ```bash
-   python src/baseline_benchmark.py --use-ibm
-   ```
-
-**See `docs/IBM_QUANTUM_SETUP.md` for detailed instructions.**
-
----
-
-## 🎓 Research Context
-
-### Baseline Paper
-
-**Azad et al. (2023)**: "Solving Vehicle Routing Problem Using Quantum Approximate Optimization Algorithm"  
-*IEEE Transactions on Intelligent Transportation Systems, Vol. 24, No. 7, July 2023*
-
-**Their contribution:**
-- First demonstration of QAOA for VRP
-- Validated quantum formulation against classical solvers (CPLEX)
-- Identified optimal QAOA depths:
-  - p≥12 for (4 nodes, 2 vehicles)
-  - p≥24 for (5 nodes, 3 vehicles)
-- Showed QAOA can match classical optimal solutions
-
-**Their limitation:**
-- Cannot scale beyond 5 nodes (20 qubits) due to NISQ constraints
-- No strategy for solving practical problem sizes (50+ nodes)
-- Manual parameter tuning required
-- No warm-starting or adaptive techniques
-
----
-
-### Our Contribution
-
-**This work**: "Hierarchical Quantum-Classical VRP Solver with Progressive Warm-Starting"
-
-**Key innovations:**
-
-1. **Hierarchical Decomposition**
-   - Scale to 50+ nodes via recursive K-Means clustering
-   - Ensures all sub-problems stay within NISQ limits (≤20 qubits)
-   - 10× larger than previous work
-
-2. **Progressive Warm-Starting**
-   - Transfer optimal parameters between clusters
-   - 40-60% faster convergence vs random initialization
-   - Cross-cluster and intra-depth parameter transfer
-
-3. **Adaptive Strategies**
-   - Auto-tune encoding, depth, and penalties
-   - Problem-structure-aware optimization
-   - Eliminates manual parameter selection
-
-4. **Constraint Guarantees**
-   - 100% feasible solutions
-   - Automatic feasibility checking and repair
-   - Iterative penalty adjustment
-
-5. **Fast Exact Solver**
-   - NumPy eigensolver for practical use
-   - Optional QAOA mode for quantum demonstration
-   - Hybrid quantum-inspired classical approach
-
-**Impact:**
-- First QAOA-VRP implementation to solve practical problem sizes
-- Demonstrates path to quantum advantage on NISQ devices
-- Warm-starting technique applicable to all variational quantum algorithms
-
----
-
-## 🐛 Troubleshooting
-
-### Issue: "CPLEX not available"
-
-**Cause**: CPLEX is an optional commercial solver.
-
-**Solution**: CPLEX is optional. Baseline will skip classical comparison if not installed.
-
-```bash
-# To install CPLEX (requires license):
-pip install cplex
-```
-
-**Alternative**: The baseline will still run QAOA validation without CPLEX.
-
----
-
-### Issue: "ModuleNotFoundError: No module named 'sklearn'"
-
-**Cause**: scikit-learn not installed.
-
-**Solution**:
-```bash
-pip install scikit-learn
-```
-
----
-
-### Issue: "Slow QAOA convergence"
-
-**Cause**: QAOA mode with StatevectorSampler is slow for 12+ qubits.
-
-**Solution**: The default solver uses NumPy (fast). If you enabled QAOA mode and it's slow:
-
-1. Reduce iterations: `--iters 100`
-2. Use fewer depths: `--depths 1`
-3. Use IBM Cloud: `--use-ibm`
-4. Switch back to NumPy solver (edit `src/qaoa_solver_v2.py`)
-
----
-
-### Issue: "Out of memory"
-
-**Cause**: Large problem size or too many clusters.
-
-**Solution**: Reduce problem size:
-```bash
-python src/main_pipeline.py --clusters 5
-```
-
----
-
-### Issue: "Import errors after moving files"
-
-**Cause**: Running scripts from wrong directory.
-
-**Solution**: Always run scripts from project root:
-
-```bash
-# ✓ Correct (from project root)
-python src/main_pipeline.py
-
-# ✗ Incorrect (from src/ directory)
-cd src && python main_pipeline.py  # Will fail
-```
-
----
-
-### Issue: "IBM Quantum token not found"
-
-**Cause**: `.env` file missing or token not set.
-
-**Solution**:
-1. Create `.env` file in project root
-2. Add: `IBM_QUANTUM_TOKEN=your_token_here`
-3. Get token from: https://quantum.ibm.com/
-
----
-
-## 📄 Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@software{hybrid_qaoa_vrp_2024,
-  title={Hybrid Quantum-Classical VRP Solver with Progressive Warm-Starting},
-  author={[Your Name]},
-  year={2024},
-  url={[Your Repository URL]}
-}
-```
-
-And the baseline paper:
-
-```bibtex
-@article{azad2023solving,
-  title={Solving Vehicle Routing Problem Using Quantum Approximate Optimization Algorithm},
-  author={Azad, Utkarsh and Behera, Bikash K and Ahmed, Emad A and Panigrahi, Prasanta K and Farouk, Ahmed},
-  journal={IEEE Transactions on Intelligent Transportation Systems},
-  volume={24},
-  number={7},
-  pages={7564--7573},
-  year={2023},
-  publisher={IEEE}
-}
-```
-
----
-
-## 📞 Support & Contributing
-
-**Issues**: Open an issue on GitHub  
-**Questions**: Check `docs/` folder for detailed guides  
-**Contributing**: Pull requests welcome
-
----
-
-## 📜 License
-
-MIT License — See [LICENSE](LICENSE) file for details.
-
----
-
-## ✅ Project Status
-
-- [x] Baseline validation (0% gap vs CPLEX)
-- [x] Hierarchical clustering (17 clusters, all NISQ-safe)
-- [x] QAOA solver with warm-starting
-- [x] Global route stitching
-- [x] End-to-end pipeline tested
-- [x] 10 publication figures generated
-- [x] Comparison tables created
-- [x] Documentation complete
-- [ ] Hardware validation on IBM Quantum
-- [ ] Performance benchmarking vs classical heuristics
-- [ ] Research paper draft
-
----
-
-**Ready to revolutionize quantum VRP solving! 🚀**
