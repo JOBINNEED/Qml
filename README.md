@@ -765,20 +765,7 @@ cd src && python main_pipeline.py  # Will fail
 
 ---
 
-## 📄 Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@software{hybrid_qaoa_vrp_2024,
-  title={Hybrid Quantum-Classical VRP Solver with Progressive Warm-Starting},
-  author={[Your Name]},
-  year={2024},
-  url={[Your Repository URL]}
-}
-```
-
-And the baseline paper:
+the baseline paper:
 
 ```bibtex
 @article{azad2023solving,
@@ -793,36 +780,3 @@ And the baseline paper:
 }
 ```
 
----
-
-## 📞 Support & Contributing
-
-**Issues**: Open an issue on GitHub  
-**Questions**: Check `docs/` folder for detailed guides  
-**Contributing**: Pull requests welcome
-
----
-
-## 📜 License
-
-MIT License — See [LICENSE](LICENSE) file for details.
-
----
-
-## ✅ Project Status
-
-- [x] Baseline validation (0% gap vs CPLEX)
-- [x] Hierarchical clustering (17 clusters, all NISQ-safe)
-- [x] QAOA solver with warm-starting
-- [x] Global route stitching
-- [x] End-to-end pipeline tested
-- [x] 10 publication figures generated
-- [x] Comparison tables created
-- [x] Documentation complete
-- [ ] Hardware validation on IBM Quantum
-- [ ] Performance benchmarking vs classical heuristics
-- [ ] Research paper draft
-
----
-
-**Ready to revolutionize quantum VRP solving! 🚀**
